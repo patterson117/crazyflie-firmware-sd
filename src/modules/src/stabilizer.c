@@ -40,6 +40,7 @@
 #include "sitaw.h"
 #include "controller.h"
 #include "power_distribution.h"
+#include "usddeck.h"
 
 #ifdef ESTIMATOR_TYPE_kalman
 #include "estimator_kalman.h"
@@ -54,6 +55,7 @@ static setpoint_t setpoint;
 static sensorData_t sensorData;
 static state_t state;
 static control_t control;
+static UsdLogStruct logData;
 
 static void stabilizerTask(void* param);
 
@@ -124,8 +126,25 @@ static void stabilizerTask(void* param)
     sitAwUpdateSetpoint(&setpoint, &sensorData, &state);
 
     stateController(&control, &setpoint, &sensorData, &state, tick);
-    powerDistribution(&control);
 
+    logData.timestamp=tick;
+
+    logData.gx=sensorData.gyro.x;
+    logData.gy=sensorData.gyro.y;
+    logData.gz=sensorData.gyro.z;
+
+    logData.ax=sensorData.acc.x;
+    logData.ay=sensorData.acc.y;
+    logData.az=sensorData.acc.z;
+
+    logData.roll=control.roll;
+    logData.pitch=control.pitch;
+    logData.yaw=control.yaw;
+    logData.thrust=control.thrust;
+
+    usdQueueLogData(&logData);
+
+    powerDistribution(&control);
     tick++;
   }
 }

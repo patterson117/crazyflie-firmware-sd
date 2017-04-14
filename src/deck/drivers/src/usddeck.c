@@ -53,6 +53,10 @@
 // Hardware defines
 #define USD_CS_PIN    DECK_GPIO_IO4
 
+// Log data defines
+#define USD_DATAQUEUE_ITEMS       100// Items for roughly one second of buffer
+#define USD_CLOSE_REOPEN_BYTES    (USD_DATAQUEUE_ITEMS * 10 * sizeof(UsdLogStruct))
+
 // FATFS low lever driver functions.
 static void initSpi(void);
 static void setSlowSpiMode(void);
@@ -68,6 +72,7 @@ static BYTE exchangeBuff[512];
 DWORD workBuff[512];  /* 2048 byte working buffer */
 #endif
 
+xQueueHandle usdDataQueue;
 static xTimerHandle timer;
 static void usdTimer(xTimerHandle timer);
 
@@ -104,6 +109,89 @@ static DISKIO_LowLevelDriver_t fatDrv =
 };
 
 
+static bool usdMountAndOpen(bool append)
+{
+  bool fileStatus = false;
+  FRESULT err_code;
+  //DEBUG_PRINT("Mouting Drive.....\n");
+  err_code=f_mount(&FatFs, "", 1);
+  //DEBUG_PRINT("Mount Error: %d\n",err_code);
+
+  //Mount drive
+  if (err_code==FR_OK)
+  {
+    //DEBUG_PRINT("Drive mounted [OK]\n");
+    //Try to open file
+    if (append)
+    {
+      if (f_open(&logFile, "log.bin", FA_OPEN_APPEND | FA_READ | FA_WRITE) == FR_OK)
+      {
+        fileStatus = true;
+      }
+    }
+    else
+    {
+      if (f_open(&logFile, "log.bin", FA_CREATE_ALWAYS | FA_READ | FA_WRITE) == FR_OK)
+      {
+        fileStatus = true;
+      }
+    }
+  }
+
+  return fileStatus;
+}
+
+/*********** Tasks ************/
+static void usdTask(void *param)
+{
+  //Free and total space
+  uint32_t lastWakeTime;
+
+  uint32_t bytesWritten;
+  uint32_t totalBytesWritten = 0;
+  uint32_t closeReopenBytes = 0;
+  UsdLogStruct  logItem;
+  bool fileStatus;
+
+  DEBUG_PRINT("While Started\n");
+
+
+  systemWaitStart();
+
+  lastWakeTime = xTaskGetTickCount();
+
+  fileStatus = usdMountAndOpen(false);
+  while (1)
+  {
+    if (xQueueReceive(usdDataQueue, &logItem, portMAX_DELAY) && fileStatus)
+    {
+      ledSet(LED_GREEN_R, 1);
+      f_write(&logFile, &logItem, sizeof(UsdLogStruct), (UINT*)&bytesWritten);
+      ledSet(LED_GREEN_R, 0);
+
+      totalBytesWritten += bytesWritten;
+      closeReopenBytes += bytesWritten;
+
+      if (closeReopenBytes > USD_CLOSE_REOPEN_BYTES)
+      {
+        // To be sure to write down the data we close and reopen
+        //DEBUG_PRINT("Data Written\n");
+        closeReopenBytes = 0;
+        f_close(&logFile);
+        f_mount(0, "", 1);
+
+        if (!usdMountAndOpen(true))
+        {
+          // Suspend ourselves
+          vTaskSuspend(0);
+        }
+      }
+    }
+    /* vTaskDelayUntil(&lastWakeTime, F2T(2)); */
+    /* DEBUG_PRINT("1\n"); */
+    }
+
+}
 /*-----------------------------------------------------------------------*/
 /* FATFS SPI controls (Platform dependent)                               */
 /*-----------------------------------------------------------------------*/
@@ -161,16 +249,48 @@ static void csLow(void)
 }
 
 
+//void logUSD(UsdLogStruct* logData)
+//{
+//  int totalBytesWritten=0;
+//  //int bytesWritten=1;
+//  bool cont=true;
+//  if (true==cont)
+//  {
+//    //f_write(&logFile,&logData,sizeof(UsdLogStruct), (UINT*)&bytesWritten);
+//    f_printf(&logFile,"%d,%d\n",1,2);
+//
+//    totalBytesWritten=totalBytesWritten+1;
+//    DEBUG_PRINT("BW: %d\n",totalBytesWritten);
+//    f_close(&logFile);
+//    if(totalBytesWritten>10)
+//    {
+//      DEBUG_PRINT("LOGGING COMPLETE\n");
+//      cont=false;
+//      f_mount(0,"",1);
+//    }
+//  }
+//}         ANDREW
 
-/*********** Deck driver initialization ***************/
 
+/********** Deck driver initialization ***************/
 static bool isInit = false;
 
 static void usdInit(DeckInfo *info)
 {
+
+  xTaskCreate(usdTask, "usdTask", 2*configMINIMAL_STACK_SIZE, NULL, /*priority*/0, NULL);
+
+  usdDataQueue = xQueueCreate(USD_DATAQUEUE_ITEMS, sizeof(UsdLogStruct));
+
+  if (usdDataQueue)
+  {
+    DEBUG_PRINT("Data Queue Created\n");
+  }
+
   isInit = true;
 
   FATFS_AddDriver(&fatDrv, 0);
+  /* DEBUG_PRINT("Mount Error Code: %d\n",f_mount(&FatFs,"",1)); //Andrew */
 
   timer = xTimerCreate( "usdTimer", M2T(SD_DISK_TIMER_PERIOD_MS), pdTRUE, NULL, usdTimer);
   xTimerStart(timer, 0);
@@ -178,6 +298,8 @@ static void usdInit(DeckInfo *info)
 
 static bool usdTest()
 {
+
+  DEBUG_PRINT("SELF TEST STARTED\n");
   if (!isInit)
   {
     DEBUG_PRINT("Error while initializing uSD deck\n");
@@ -204,6 +326,19 @@ static bool usdTest()
 static void usdTimer(xTimerHandle timer)
 {
   SD_disk_timerproc(&sdSpiContext);
+}
+
+bool usdQueueLogData(UsdLogStruct* logData)
+{
+  if(!usdDataQueue || !isInit)
+  {
+    DEBUG_PRINT("usdQueueLogData Failed");
+    return 0;
+  }
+  else
+  {
+    return(xQueueSendToBack(usdDataQueue, logData, 0) == pdTRUE);
+  }
 }
 
 static const DeckDriver usd_deck = {

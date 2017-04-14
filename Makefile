@@ -11,7 +11,7 @@ CFLAGS += $(EXTRA_CFLAGS)
 
 ######### JTAG and environment configuration ##########
 OPENOCD           ?= openocd
-OPENOCD_INTERFACE ?= interface/stlink-v2.cfg
+OPENOCD_INTERFACE ?= interface/stlink-v2-1.cfg
 OPENOCD_CMDS      ?=
 CROSS_COMPILE     ?= arm-none-eabi-
 PYTHON2           ?= python2
@@ -40,7 +40,7 @@ OPENOCD_TARGET    ?= target/stm32f1x_stlink.cfg
 USE_FPU            = 0
 endif
 ifeq ($(PLATFORM), CF2)
-OPENOCD_TARGET    ?= target/stm32f4x_stlink.cfg
+OPENOCD_TARGET    ?= target/stm32f4x.cfg
 USE_FPU           ?= 1
 endif
 
@@ -274,7 +274,7 @@ ifeq ($(DEBUG), 1)
   CFLAGS += -O0 -g3 -DDEBUG
 else
 	# Fail on warnings
-  CFLAGS += -Os -g3 -Werror
+  # CFLAGS += -Os -g3 -Werror
 endif
 
 ifeq ($(LTO), 1)
@@ -306,6 +306,7 @@ CFLAGS += -Wdouble-promotion
 
 ASFLAGS = $(PROCESSOR) $(INCLUDES)
 LDFLAGS = --specs=nano.specs $(PROCESSOR) -Wl,-Map=$(PROG).map,--cref,--gc-sections,--undefined=uxTopUsedPriority
+LDFLAGS += -Wl,--no-wchar-size-warning
 
 #Flags required by the ST library
 ifeq ($(CLOAD), 1)
